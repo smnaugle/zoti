@@ -36,12 +36,14 @@ pub const Histogram = struct {
         hist.scratch_point = try allocator.alloc(f64, bins.len);
         try hist.createBinVolumes(allocator);
         if (points_opt) |points| {
-            for (0..points[0].len) |idx| {
-                for (0..points.len) |dim_idx| {
-                    hist.scratch_point[dim_idx] = points[dim_idx][idx];
+            if (points.len != 0) {
+                for (0..points[0].len) |idx| {
+                    for (0..points.len) |dim_idx| {
+                        hist.scratch_point[dim_idx] = points[dim_idx][idx];
+                    }
+                    hist.addPoint(hist.scratch_point);
+                    if (hist.nentries > options.points_limit) break;
                 }
-                hist.addPoint(hist.scratch_point);
-                if (hist.nentries > options.points_limit) break;
             }
         }
         hist.options = options;
@@ -255,6 +257,11 @@ pub const Histogram = struct {
         return projection;
     }
 
+    pub fn clear(self: *Histogram) void {
+        for (self.contents) |*c| c.* = 0;
+        self.nentries = 0;
+    }
+
     pub fn deinit(self: Histogram, allocator: Allocator) void {
         for (self.bins) |*b| {
             allocator.free(b.*);
@@ -266,6 +273,22 @@ pub const Histogram = struct {
         allocator.free(self.scratch_point);
     }
 };
+
+fn createFromNormal(allocator: Allocator, nsamps: usize, hist_opts: Histogram.Options) !Histogram {
+    const bins = try utils.linearSpacedBins(f64, allocator, -5, 5, 20);
+    defer allocator.free(bins);
+
+    var samps: std.ArrayList(f64) = try .initCapacity(allocator, nsamps);
+    defer samps.deinit(allocator);
+
+    var rng_gen = std.Random.DefaultPrng.init(std.testing.random_seed);
+    for (0..nsamps) |_| {
+        samps.appendAssumeCapacity(rng_gen.random().floatNorm(f64));
+    }
+
+    const hist = try Histogram.init(allocator, &.{bins}, &.{samps.items}, hist_opts);
+    return hist;
+}
 
 test "make histogram" {
     const allocator = std.testing.allocator;
@@ -296,6 +319,19 @@ test "make histogram" {
     try std.testing.expect(std.mem.eql(u8, norm_str, "{ 0, 0.16666666666666666, 0.16666666666666666, 0, 0.16666666666666666, 0.3333333333333333, 0, 0, 0, 0.16666666666666666 }"));
 }
 
+test "clear" {
+    const allocator = std.testing.allocator;
+    var norm_histogram = try createFromNormal(allocator, 1000, .{});
+    defer norm_histogram.deinit(allocator);
+    norm_histogram.clear();
+    try std.testing.expect(norm_histogram.nentries == 0);
+    var allzero: bool = true;
+    for (norm_histogram.contents) |c| {
+        if (c != 0) allzero = false;
+    }
+    try std.testing.expect(allzero);
+}
+
 test "2d" {
     const allocator = std.testing.allocator;
 
@@ -318,4 +354,13 @@ test "2d" {
 
     try std.testing.expect(std.mem.eql(f64, &.{ 0, 0, 2, 0, 0, 0, 1, 2, 1, 2 }, p0));
     try std.testing.expect(std.mem.eql(f64, &.{ 0, 1, 0, 0, 7, 0, 0, 0, 0, 0 }, p1));
+}
+
+test "clone" {
+    const allocator = std.testing.allocator;
+    const hist = try createFromNormal(allocator, 1000, .{});
+    defer hist.deinit(allocator);
+
+    const clone = try hist.clone(allocator);
+    defer clone.deinit(allocator);
 }
