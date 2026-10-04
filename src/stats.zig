@@ -48,9 +48,8 @@ pub fn pdfToQF(allocator: Allocator, bins: []const f64, pdf: []const f64, probs:
     return cdfToQF(allocator, bins, cdf, probs);
 }
 
-pub fn qfToPDF(allocator: Allocator, bins: []const f64, probs: []const f64, qf: []const f64) ![]f64 {
+pub fn qfToCDF(allocator: Allocator, bins: []const f64, probs: []const f64, qf: []const f64) ![]f64 {
     const cdf = try allocator.alloc(f64, bins.len - 1);
-    defer allocator.free(cdf);
     for (0..cdf.len) |idx| {
         const center = (bins[idx + 1] + bins[idx]) / 2;
         if (center < qf[0]) {
@@ -64,7 +63,12 @@ pub fn qfToPDF(allocator: Allocator, bins: []const f64, probs: []const f64, qf: 
     for (cdf) |*c| {
         c.* /= cdf[cdf.len - 1];
     }
+    return cdf;
+}
 
+pub fn qfToPDF(allocator: Allocator, bins: []const f64, probs: []const f64, qf: []const f64) ![]f64 {
+    const cdf = try qfToCDF(allocator, bins, probs, qf);
+    defer allocator.free(cdf);
     const pdf = cdfToPDF(allocator, bins, cdf);
     return pdf;
 }
