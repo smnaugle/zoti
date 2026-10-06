@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const log = std.log.scoped(.zoti);
+
 pub const Histogram = @import("histogram.zig").Histogram;
 
 pub const GridPDFInterpolatorOptions = struct {
@@ -118,14 +120,17 @@ pub const GridPDFInterpolator = struct {
         self.root_pdf.loadNewPoints(points, .{ .density = true, .zero_pad = 1e-32 });
 
         self.pdfs[flat_idx] = try allocator.dupe(f64, self.root_pdf.contents);
+        log.debug("Loading PDF for {any}: {any}", .{ interp_point, self.pdfs[flat_idx] });
 
         var marginal_cdfs = try allocator.alloc([]const f64, self.root_pdf.bins.len);
         var marginal_qfs = try allocator.alloc([]const f64, self.root_pdf.bins.len);
         for (0..self.root_pdf.bins.len) |pdf_dim| {
             const marginal = try self.root_pdf.project(allocator, pdf_dim);
+            log.debug("Marginal: {any}", .{marginal});
             defer allocator.free(marginal);
 
             marginal_cdfs[pdf_dim] = try stats.getCDF(allocator, marginal, self.root_pdf.bins[pdf_dim]);
+            for (marginal_cdfs[pdf_dim]) |*c| @constCast(c).* /= marginal_cdfs[pdf_dim][marginal_cdfs[pdf_dim].len - 1];
             marginal_qfs[pdf_dim] = try stats.pdfToQF(allocator, self.root_pdf.bins[pdf_dim], marginal, self.probabilities);
         }
         self.marginal_cdfs[flat_idx] = marginal_cdfs;
@@ -171,11 +176,41 @@ pub const GridPDFInterpolator = struct {
         return .{ .idxs = idxs, .points = points };
     }
 
-    pub fn getWeights(allocator: Allocator, interp_point: []const f64, points: []const []const f64) ![]f64 {
-        // FIXME: Dumb average
-        _ = interp_point;
-        const weights = try allocator.alloc(f64, points.len);
-        for (weights) |*w| w.* = 1.0 / @as(f64, @floatFromInt(points.len));
+    pub fn getWeights(allocator: std.mem.Allocator, points: []const []const f64, interp_point: []const f64) ![]f64 {
+        var total: f64 = 0;
+        var weights = try allocator.alloc(f64, points.len);
+
+        for (points, 0..) |pt, pt_idx| {
+            var area: f64 = 1;
+            for (pt, 0..) |p, dim_idx| {
+                area *= @abs(interp_point[dim_idx] - p);
+            }
+            weights[pt_idx] = area;
+            total += area;
+        }
+
+        for (weights) |*w| w.* /= total;
+
+        switch (weights.len) {
+            2 => {
+                const w0 = weights[0];
+                const w1 = weights[1];
+                weights[0] = w1;
+                weights[1] = w0;
+            },
+            4 => {
+                const w0 = weights[0];
+                const w1 = weights[1];
+                const w2 = weights[2];
+                const w3 = weights[3];
+                weights[0] = w3;
+                weights[1] = w2;
+                weights[2] = w1;
+                weights[3] = w0;
+            },
+            else => @panic("Cannot get weights for dimension of problem."),
+        }
+
         return weights;
     }
 
@@ -185,7 +220,6 @@ pub const GridPDFInterpolator = struct {
         bounding_box: BoundingBox,
         weights: []const f64,
     ) ![][]f64 {
-        //
         const barycenters = try allocator.alloc([]f64, self.root_pdf.bins.len);
         for (0..barycenters.len) |dim_idx| {
             const barycenter = try allocator.alloc(f64, self.probabilities.len);
@@ -194,9 +228,10 @@ pub const GridPDFInterpolator = struct {
         }
 
         for (0..bounding_box.idxs.len) |point_idx| {
+            const flat_idx = bounding_box.idxs[point_idx];
             for (0..barycenters.len) |dim_idx| {
                 for (barycenters[dim_idx], 0..) |*b, b_idx| {
-                    b.* += weights[point_idx] * self.marginal_qfs[point_idx][dim_idx][b_idx];
+                    b.* += weights[point_idx] * self.marginal_qfs[flat_idx][dim_idx][b_idx];
                 }
             }
         }
@@ -213,7 +248,7 @@ pub const GridPDFInterpolator = struct {
             allocator.free(bounding_box.idxs);
         }
 
-        const weights = try getWeights(allocator, interp_point, bounding_box.points);
+        const weights = try getWeights(allocator, bounding_box.points, interp_point);
         defer allocator.free(weights);
 
         const barycenters = try self.calculateBarycenters(allocator, bounding_box, weights);
@@ -237,14 +272,25 @@ pub const GridPDFInterpolator = struct {
             defer allocator.free(centers);
             for (0..bounding_box.points.len) |point_idx| {
                 const bary_cdf = try stats.qfToCDF(allocator, self.root_pdf.bins[pdf_dim], self.probabilities, barycenters[pdf_dim]);
+                log.debug("Barycenter CDF: {any}", .{bary_cdf});
                 defer allocator.free(bary_cdf);
                 const flat_idx = bounding_box.idxs[point_idx];
                 const qf = self.marginal_qfs[flat_idx][pdf_dim];
+                log.debug("QF: {any}", .{qf});
                 const map = try allocator.alloc(f64, centers.len);
                 defer allocator.free(map);
+
                 for (map, 0..) |*m, idx| {
-                    m.* = utils.interp(f64, self.probabilities, qf, bary_cdf[idx], .flat);
+                    if (bary_cdf[idx] < self.probabilities[0]) {
+                        m.* = centers[0];
+                    } else if (bary_cdf[idx] > self.probabilities[self.probabilities.len - 1]) {
+                        m.* = centers[centers.len - 1];
+                    } else {
+                        m.* = utils.interp(f64, self.probabilities, qf, bary_cdf[idx], .flat);
+                    }
                 }
+
+                log.debug("Map: {any}", .{map});
 
                 const slice_pdf = try allocator.alloc(f64, centers.len);
                 defer allocator.free(slice_pdf);
@@ -256,8 +302,18 @@ pub const GridPDFInterpolator = struct {
                 while (iter.next()) |slice| {
                     for (slice, 0..) |s, i| slice_pdf[i] = s.*;
                     const slice_cdf = try stats.getCDF(allocator, slice_pdf, self.root_pdf.bins[pdf_dim]);
+                    log.debug("Slice CDF: {any}", .{slice_cdf});
                     defer allocator.free(slice_cdf);
-                    for (0..pushed_cdf.len) |idx| pushed_cdf[idx] = utils.interp(f64, centers, slice_cdf, map[idx], .flat);
+                    for (0..pushed_cdf.len) |idx| {
+                        if (map[0] == map[1] and map[idx] == map[0]) {
+                            pushed_cdf[idx] = 0;
+                        } else if (centers[idx] > map[map.len - 1]) {
+                            pushed_cdf[idx] = slice_cdf[slice_cdf.len - 1];
+                        } else {
+                            pushed_cdf[idx] = utils.interp(f64, centers, slice_cdf, map[idx], .flat);
+                        }
+                        log.debug("Pushed CDF interp: {d}, {d}", .{ map[idx], pushed_cdf[idx] });
+                    }
                     const pushed_pdf = try stats.cdfToPDF(allocator, self.root_pdf.bins[pdf_dim], pushed_cdf);
                     defer allocator.free(pushed_pdf);
                     for (iter.slice_true_idxs, 0..) |true_idx, idx| pushed_pdfs[point_idx][true_idx] += pushed_pdf[idx];
@@ -278,49 +334,11 @@ pub const GridPDFInterpolator = struct {
     }
 };
 
-fn createInterp(allocator: Allocator, seed: u64) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var rng: std.Random.DefaultPrng = .init(seed);
-
-    const gridx = try utils.linearSpacedBins(f64, arena.allocator(), -10, 10, 10);
-    const gridy = try utils.linearSpacedBins(f64, arena.allocator(), 1, 10, 10);
-
-    const pdf_bins = try utils.linearSpacedBins(f64, allocator, -20, 20, 100);
-    defer allocator.free(pdf_bins);
-
-    const interp: GridPDFInterpolator = try .init(
-        allocator,
-        &.{ gridx, gridy },
-        &.{pdf_bins},
-        .{ .probability_steps = 10000 },
-    );
-    defer interp.deinit(allocator);
-    const data = try allocator.alloc(f64, 1000);
-    defer allocator.free(data);
-    for (0..gridx.len) |i| {
-        for (0..gridy.len) |j| {
-            for (0..data.len) |idx| {
-                data[idx] = rng.random().floatNorm(f64) * gridy[j] + gridx[i];
-            }
-            try interp.setAtFromPoints(allocator, &.{ gridx[i], gridy[j] }, &.{data});
-        }
-    }
-    const interp_pdf = try interp.generatePDF(allocator, &.{ 0.2, 1.5 });
-    defer allocator.free(interp_pdf);
-
-    std.log.err("{any}", .{interp_pdf});
-}
-
 const stats = @import("stats.zig");
 const utils = @import("utilities.zig");
 const histogram = @import("histogram.zig");
 
 test {
-    const allocator = std.testing.allocator;
-    try createInterp(allocator, std.testing.random_seed);
-
     _ = histogram;
     _ = stats;
     _ = utils;

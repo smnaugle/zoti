@@ -15,6 +15,18 @@ pub fn build(b: *std.Build) void {
     );
     b.installArtifact(ztoi_lib);
 
+    const test_exe = b.addExecutable(
+        .{
+            .name = "test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/tests.zig"),
+                .optimize = optimize,
+                .target = target,
+            }),
+        },
+    );
+    b.installArtifact(test_exe);
+
     const tests = b.addTest(.{
         .root_module = ztoi_lib.root_module,
     });

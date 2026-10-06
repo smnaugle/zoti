@@ -36,14 +36,22 @@ pub fn cdfToQF(allocator: Allocator, bins: []const f64, cdf: []const f64, probs:
     defer allocator.free(centers);
 
     const qf = try allocator.alloc(f64, probs.len);
+
+    std.log.debug("cdf: {any}", .{cdf});
+    std.log.debug("centers: {any}", .{centers});
+
     for (0..probs.len) |idx| {
         qf[idx] = utils.interp(f64, cdf, centers, probs[idx], .flat);
+        std.log.debug("{d} to {d}", .{ probs[idx], qf[idx] });
     }
     return qf;
 }
 
 pub fn pdfToQF(allocator: Allocator, bins: []const f64, pdf: []const f64, probs: []const f64) ![]f64 {
     const cdf = try getCDF(allocator, pdf, bins);
+    if (!std.math.approxEqRel(f64, cdf[cdf.len - 1], 1, 1e-6)) {
+        for (cdf) |*c| c.* /= cdf[cdf.len - 1];
+    }
     defer allocator.free(cdf);
     return cdfToQF(allocator, bins, cdf, probs);
 }

@@ -245,6 +245,11 @@ pub const Histogram = struct {
 
     pub fn project(self: Histogram, allocator: Allocator, dimension: usize) ![]f64 {
         const projection = try allocator.alloc(f64, self.bins[dimension].len - 1);
+        if (self.bins.len == 1) {
+            if (dimension != 0) @panic("Cannot project");
+            @memcpy(projection, self.contents);
+            return projection;
+        }
         for (projection) |*el| el.* = 0;
         var iter = try self.sliceIterator(allocator, dimension);
         defer iter.deinit(allocator);
