@@ -277,7 +277,7 @@ pub const GridPDFInterpolator = struct {
                 const flat_idx = bounding_box.idxs[point_idx];
                 const qf = self.marginal_qfs[flat_idx][pdf_dim];
                 log.debug("QF: {any}", .{qf});
-                const map = try allocator.alloc(f64, centers.len);
+                const map = try allocator.alloc(f64, bary_cdf.len);
                 defer allocator.free(map);
 
                 for (map, 0..) |*m, idx| {
@@ -294,7 +294,7 @@ pub const GridPDFInterpolator = struct {
 
                 const slice_pdf = try allocator.alloc(f64, centers.len);
                 defer allocator.free(slice_pdf);
-                const pushed_cdf = try allocator.alloc(f64, centers.len);
+                const pushed_cdf = try allocator.alloc(f64, centers.len + 1);
                 defer allocator.free(pushed_cdf);
                 @memcpy(self.root_pdf.contents, self.pdfs[flat_idx]);
                 var iter = try self.root_pdf.sliceIterator(allocator, pdf_dim);
@@ -304,14 +304,16 @@ pub const GridPDFInterpolator = struct {
                     const slice_cdf = try stats.getCDF(allocator, slice_pdf, self.root_pdf.bins[pdf_dim]);
                     log.debug("Slice CDF: {any}", .{slice_cdf});
                     defer allocator.free(slice_cdf);
+                    pushed_cdf[0] = 0;
                     for (0..pushed_cdf.len) |idx| {
-                        if (map[0] == map[1] and map[idx] == map[0]) {
-                            pushed_cdf[idx] = 0;
-                        } else if (centers[idx] > map[map.len - 1]) {
-                            pushed_cdf[idx] = slice_cdf[slice_cdf.len - 1];
-                        } else {
-                            pushed_cdf[idx] = utils.interp(f64, centers, slice_cdf, map[idx], .flat);
-                        }
+                        // if (map[0] == map[1] and map[idx] == map[0]) {
+                        //     pushed_cdf[idx] = 0;
+                        // } else if (centers[idx] > map[map.len - 1]) {
+                        //     pushed_cdf[idx] = slice_cdf[slice_cdf.len - 1];
+                        // } else {
+                        //     pushed_cdf[idx] = utils.interp(f64, centers, slice_cdf, map[idx], .flat);
+                        // }
+                        pushed_cdf[idx] = utils.interp(f64, self.root_pdf.bins[pdf_dim], slice_cdf, map[idx], .flat);
                         log.debug("Pushed CDF interp: {d}, {d}", .{ map[idx], pushed_cdf[idx] });
                     }
                     const pushed_pdf = try stats.cdfToPDF(allocator, self.root_pdf.bins[pdf_dim], pushed_cdf);

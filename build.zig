@@ -10,9 +10,11 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/zoti.zig"),
                 .optimize = optimize,
                 .target = target,
+                .link_libc = true,
             }),
         },
     );
+    ztoi_lib.root_module.linkSystemLibrary("hdf5", .{});
     b.installArtifact(ztoi_lib);
 
     const test_exe = b.addExecutable(
@@ -22,9 +24,11 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/tests.zig"),
                 .optimize = optimize,
                 .target = target,
+                .link_libc = true,
             }),
         },
     );
+    test_exe.root_module.linkSystemLibrary("hdf5", .{});
     b.installArtifact(test_exe);
 
     const tests = b.addTest(.{
