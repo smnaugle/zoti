@@ -65,6 +65,7 @@ pub fn interp(comptime T: type, xs: []const T, ys: []const T, pt: T, edge: EdgeB
     if (!std.math.isFinite(lerp)) {
         std.log.err("Non-finite lerp: {d}", .{lerp});
         std.log.err("\t{d}, {d}, {d}, {d}, {d},", .{ pt, xs[ub - 1], xs[ub], ys[ub - 1], ys[ub] });
+        @panic("");
     }
     return lerp;
 }

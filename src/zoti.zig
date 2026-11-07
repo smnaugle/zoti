@@ -117,7 +117,7 @@ pub const GridPDFInterpolator = struct {
         const flat_idx = try self.calculateFlatIdx(interp_point);
 
         // TODO: Take options
-        self.root_pdf.loadNewPoints(points, .{ .density = true, .zero_pad = 1e-32 });
+        self.root_pdf.loadNewPoints(points, .{ .density = true, .zero_pad = 1e-6 });
 
         self.pdfs[flat_idx] = try allocator.dupe(f64, self.root_pdf.contents);
         log.debug("Loading PDF for {any}: {any}", .{ interp_point, self.pdfs[flat_idx] });
@@ -258,9 +258,10 @@ pub const GridPDFInterpolator = struct {
         }
 
         const pushed_pdfs = try allocator.alloc([]f64, bounding_box.idxs.len);
-        for (pushed_pdfs) |*p| {
+        for (pushed_pdfs, 0..) |*p, bb_idx| {
             p.* = try allocator.alloc(f64, self.root_pdf.contents.len);
-            for (p.*) |*c| c.* = 0;
+            @memcpy(p.*, self.pdfs[bounding_box.idxs[bb_idx]]);
+            // for (p.*) |*c| c.* = 0;
         }
         defer {
             for (pushed_pdfs) |p| allocator.free(p);
@@ -268,8 +269,6 @@ pub const GridPDFInterpolator = struct {
         }
 
         for (0..self.root_pdf.bins.len) |pdf_dim| {
-            const centers = try utils.centers(f64, allocator, self.root_pdf.bins[pdf_dim]);
-            defer allocator.free(centers);
             for (0..bounding_box.points.len) |point_idx| {
                 const bary_cdf = try stats.qfToCDF(allocator, self.root_pdf.bins[pdf_dim], self.probabilities, barycenters[pdf_dim]);
                 log.debug("Barycenter CDF: {any}", .{bary_cdf});
@@ -281,44 +280,45 @@ pub const GridPDFInterpolator = struct {
                 defer allocator.free(map);
 
                 for (map, 0..) |*m, idx| {
-                    if (bary_cdf[idx] < self.probabilities[0]) {
-                        m.* = centers[0];
-                    } else if (bary_cdf[idx] > self.probabilities[self.probabilities.len - 1]) {
-                        m.* = centers[centers.len - 1];
-                    } else {
-                        m.* = utils.interp(f64, self.probabilities, qf, bary_cdf[idx], .flat);
-                    }
+                    m.* = utils.interp(f64, self.probabilities, qf, bary_cdf[idx], .flat);
                 }
 
                 log.debug("Map: {any}", .{map});
 
-                const slice_pdf = try allocator.alloc(f64, centers.len);
+                const slice_pdf = try allocator.alloc(f64, self.root_pdf.bins[pdf_dim].len - 1);
                 defer allocator.free(slice_pdf);
-                const pushed_cdf = try allocator.alloc(f64, centers.len + 1);
+                const pushed_cdf = try allocator.alloc(f64, slice_pdf.len + 1);
                 defer allocator.free(pushed_cdf);
-                @memcpy(self.root_pdf.contents, self.pdfs[flat_idx]);
+                @memcpy(self.root_pdf.contents, pushed_pdfs[point_idx]);
                 var iter = try self.root_pdf.sliceIterator(allocator, pdf_dim);
                 defer iter.deinit(allocator);
                 while (iter.next()) |slice| {
-                    for (slice, 0..) |s, i| slice_pdf[i] = s.*;
+                    var slice_norm: f64 = 0;
+                    var all_zero: bool = true;
+                    for (slice, 0..) |s, i| {
+                        slice_pdf[i] = s.*;
+                        const width = self.root_pdf.bins[pdf_dim][i + 1] - self.root_pdf.bins[pdf_dim][i];
+                        slice_norm += s.* * width;
+                        if (s.* != 0) all_zero = false;
+                    }
+                    if (all_zero) continue;
                     const slice_cdf = try stats.getCDF(allocator, slice_pdf, self.root_pdf.bins[pdf_dim]);
+                    for (slice_cdf) |*c| c.* /= slice_cdf[slice_cdf.len - 1];
                     log.debug("Slice CDF: {any}", .{slice_cdf});
                     defer allocator.free(slice_cdf);
                     pushed_cdf[0] = 0;
                     for (0..pushed_cdf.len) |idx| {
-                        // if (map[0] == map[1] and map[idx] == map[0]) {
-                        //     pushed_cdf[idx] = 0;
-                        // } else if (centers[idx] > map[map.len - 1]) {
-                        //     pushed_cdf[idx] = slice_cdf[slice_cdf.len - 1];
-                        // } else {
-                        //     pushed_cdf[idx] = utils.interp(f64, centers, slice_cdf, map[idx], .flat);
-                        // }
                         pushed_cdf[idx] = utils.interp(f64, self.root_pdf.bins[pdf_dim], slice_cdf, map[idx], .flat);
                         log.debug("Pushed CDF interp: {d}, {d}", .{ map[idx], pushed_cdf[idx] });
                     }
+                    for (pushed_cdf) |*c| c.* /= pushed_cdf[pushed_cdf.len - 1];
                     const pushed_pdf = try stats.cdfToPDF(allocator, self.root_pdf.bins[pdf_dim], pushed_cdf);
                     defer allocator.free(pushed_pdf);
-                    for (iter.slice_true_idxs, 0..) |true_idx, idx| pushed_pdfs[point_idx][true_idx] += pushed_pdf[idx];
+                    for (iter.slice_true_idxs, 0..) |true_idx, idx| {
+                        if (pushed_pdf[idx] >= 0 and slice_norm >= 0) {
+                            pushed_pdfs[point_idx][true_idx] = pushed_pdf[idx] * slice_norm;
+                        }
+                    }
                 }
             }
         }

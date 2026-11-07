@@ -36,7 +36,7 @@ pub fn getCDF(allocator: Allocator, pdf: []const f64, bins: []const f64) ![]f64 
 
 pub fn cdfToPDF(allocator: Allocator, bins: []const f64, cdf: []const f64) ![]f64 {
     const pdf = try allocator.alloc(f64, cdf.len - 1);
-    for (pdf[0..], 0..pdf.len) |*p, idx| {
+    for (pdf, 0..pdf.len) |*p, idx| {
         const width = bins[idx + 1] - bins[idx];
         p.* = (cdf[idx + 1] - cdf[idx]) / width;
     }

@@ -256,7 +256,8 @@ pub const Histogram = struct {
         while (iter.next()) |slice| {
             for (slice, 0..) |el, idx| {
                 const bin_volume = self.bin_volumes[iter.slice_true_idxs[idx]];
-                projection[idx] += el.* * bin_volume;
+                const width = self.bins[dimension][idx + 1] - self.bins[dimension][idx];
+                projection[idx] += el.* * bin_volume / width;
             }
         }
         return projection;
