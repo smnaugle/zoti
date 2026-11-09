@@ -159,26 +159,15 @@ pub const GridPDFInterpolator = struct {
             lbs[idx] = std.sort.lowerBound(f64, edge, point[idx], utils.cmpCtx(f64).compFn);
         }
 
-        var mask: u64 = 0x00;
         for (0..num_points) |pt| {
             points[pt] = try allocator.alloc(f64, edges.len);
             for (0..edges.len) |dim_idx| {
-                const t: u64 = mask & std.math.pow(usize, 2, dim_idx);
-                var edge_adj: usize = 0;
-                if (t == 0) {
-                    if (lbs[dim_idx] != 0) {
-                        points[pt][dim_idx] = edges[dim_idx][lbs[dim_idx] - 1];
-                    } else {
-                        points[pt][dim_idx] = edges[dim_idx][lbs[dim_idx]];
-                        edge_adj = 1;
-                    }
-                } else {
-                    points[pt][dim_idx] = edges[dim_idx][lbs[dim_idx + edge_adj]];
-                    if (edge_adj != 0) edge_adj = 0;
-                }
+                // lower bracket index for this dimension
+                const lo: usize = if (lbs[dim_idx] != 0) lbs[dim_idx] - 1 else 0;
+                const bit: usize = (pt >> @intCast(dim_idx)) & 1;
+                points[pt][dim_idx] = edges[dim_idx][lo + bit];
             }
             idxs[pt] = try calculateFlatIdx(self, points[pt]);
-            mask += 1;
         }
         return .{ .idxs = idxs, .points = points };
     }
