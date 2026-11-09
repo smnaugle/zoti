@@ -6,12 +6,15 @@ pub fn build(b: *std.Build) void {
     const ztoi_lib = b.addLibrary(
         .{
             .name = "zoti",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/zoti.zig"),
-                .optimize = optimize,
-                .target = target,
-                .link_libc = true,
-            }),
+            .root_module = b.addModule(
+                "zoti",
+                .{
+                    .root_source_file = b.path("src/zoti.zig"),
+                    .optimize = optimize,
+                    .target = target,
+                    .link_libc = true,
+                },
+            ),
         },
     );
     ztoi_lib.root_module.linkSystemLibrary("hdf5", .{});
