@@ -269,10 +269,10 @@ pub const GridPDFInterpolator = struct {
         }
 
         for (0..self.root_pdf.bins.len) |pdf_dim| {
+            const bary_cdf = try stats.qfToCDF(allocator, self.root_pdf.bins[pdf_dim], self.probabilities, barycenters[pdf_dim]);
+            log.debug("Barycenter CDF: {any}", .{bary_cdf});
+            defer allocator.free(bary_cdf);
             for (0..bounding_box.points.len) |point_idx| {
-                const bary_cdf = try stats.qfToCDF(allocator, self.root_pdf.bins[pdf_dim], self.probabilities, barycenters[pdf_dim]);
-                log.debug("Barycenter CDF: {any}", .{bary_cdf});
-                defer allocator.free(bary_cdf);
                 const flat_idx = bounding_box.idxs[point_idx];
                 const qf = self.marginal_qfs[flat_idx][pdf_dim];
                 log.debug("QF: {any}", .{qf});
