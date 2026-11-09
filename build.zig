@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const ztoi_lib = b.addLibrary(
         .{
-            .name = "ztoi",
+            .name = "zoti",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/zoti.zig"),
                 .optimize = optimize,
