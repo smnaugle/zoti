@@ -117,7 +117,7 @@ pub const GridPDFInterpolator = struct {
         const flat_idx = try self.calculateFlatIdx(interp_point);
 
         // TODO: Take options
-        self.root_pdf.loadNewPoints(points, .{ .density = true, .zero_pad = 1e-6 });
+        self.root_pdf.loadNewPoints(points, .{ .density = true, .zero_pad = null });
 
         self.pdfs[flat_idx] = try allocator.dupe(f64, self.root_pdf.contents);
         log.debug("Loading PDF for {any}: {any}", .{ interp_point, self.pdfs[flat_idx] });
@@ -264,8 +264,11 @@ pub const GridPDFInterpolator = struct {
             allocator.free(pushed_pdfs);
         }
 
-        for (0..self.root_pdf.bins.len) |pdf_dim| {
-            const bary_cdf = try stats.qfToCDF(allocator, self.root_pdf.bins[pdf_dim], self.probabilities, barycenters[pdf_dim]);
+        const root_pdf = try self.root_pdf.clone(allocator);
+        defer root_pdf.deinit(allocator);
+
+        for (0..root_pdf.bins.len) |pdf_dim| {
+            const bary_cdf = try stats.qfToCDF(allocator, root_pdf.bins[pdf_dim], self.probabilities, barycenters[pdf_dim]);
             log.debug("Barycenter CDF: {any}", .{bary_cdf});
             defer allocator.free(bary_cdf);
             for (0..bounding_box.points.len) |point_idx| {
@@ -281,34 +284,34 @@ pub const GridPDFInterpolator = struct {
 
                 log.debug("Map: {any}", .{map});
 
-                const slice_pdf = try allocator.alloc(f64, self.root_pdf.bins[pdf_dim].len - 1);
+                const slice_pdf = try allocator.alloc(f64, root_pdf.bins[pdf_dim].len - 1);
                 defer allocator.free(slice_pdf);
                 const pushed_cdf = try allocator.alloc(f64, slice_pdf.len + 1);
                 defer allocator.free(pushed_cdf);
-                @memcpy(self.root_pdf.contents, pushed_pdfs[point_idx]);
-                var iter = try self.root_pdf.sliceIterator(allocator, pdf_dim);
+                @memcpy(root_pdf.contents, pushed_pdfs[point_idx]);
+                var iter = try root_pdf.sliceIterator(allocator, pdf_dim);
                 defer iter.deinit(allocator);
                 while (iter.next()) |slice| {
                     var slice_norm: f64 = 0;
                     var all_zero: bool = true;
                     for (slice, 0..) |s, i| {
                         slice_pdf[i] = s.*;
-                        const width = self.root_pdf.bins[pdf_dim][i + 1] - self.root_pdf.bins[pdf_dim][i];
+                        const width = root_pdf.bins[pdf_dim][i + 1] - root_pdf.bins[pdf_dim][i];
                         slice_norm += s.* * width;
                         if (s.* != 0) all_zero = false;
                     }
                     if (all_zero) continue;
-                    const slice_cdf = try stats.getCDF(allocator, slice_pdf, self.root_pdf.bins[pdf_dim]);
+                    const slice_cdf = try stats.getCDF(allocator, slice_pdf, root_pdf.bins[pdf_dim]);
                     for (slice_cdf) |*c| c.* /= slice_cdf[slice_cdf.len - 1];
                     log.debug("Slice CDF: {any}", .{slice_cdf});
                     defer allocator.free(slice_cdf);
                     pushed_cdf[0] = 0;
                     for (0..pushed_cdf.len) |idx| {
-                        pushed_cdf[idx] = utils.interp(f64, self.root_pdf.bins[pdf_dim], slice_cdf, map[idx], .flat);
+                        pushed_cdf[idx] = utils.interp(f64, root_pdf.bins[pdf_dim], slice_cdf, map[idx], .flat);
                         log.debug("Pushed CDF interp: {d}, {d}", .{ map[idx], pushed_cdf[idx] });
                     }
                     for (pushed_cdf) |*c| c.* /= pushed_cdf[pushed_cdf.len - 1];
-                    const pushed_pdf = try stats.cdfToPDF(allocator, self.root_pdf.bins[pdf_dim], pushed_cdf);
+                    const pushed_pdf = try stats.cdfToPDF(allocator, root_pdf.bins[pdf_dim], pushed_cdf);
                     defer allocator.free(pushed_pdf);
                     for (iter.slice_true_idxs, 0..) |true_idx, idx| {
                         if (pushed_pdf[idx] >= 0 and slice_norm >= 0) {
@@ -319,7 +322,7 @@ pub const GridPDFInterpolator = struct {
             }
         }
 
-        const result_pdf = try allocator.alloc(f64, self.root_pdf.contents.len);
+        const result_pdf = try allocator.alloc(f64, root_pdf.contents.len);
         for (result_pdf) |*c| c.* = 0;
 
         for (0..bounding_box.points.len) |point_idx| {
